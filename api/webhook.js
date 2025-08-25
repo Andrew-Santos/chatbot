@@ -16,20 +16,36 @@ export default function handler(req, res) {
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
 
-    console.log('Verificação do webhook recebida:', {
-      mode,
-      token,
-      challenge: challenge ? 'presente' : 'ausente'
-    });
+    // Log detalhado para debug
+    console.log('=== DEBUG VERIFICAÇÃO WEBHOOK ===');
+    console.log('Query completa recebida:', req.query);
+    console.log('Mode recebido:', mode, '(tipo:', typeof mode, ')');
+    console.log('Token recebido:', token, '(tipo:', typeof token, ')');
+    console.log('Token esperado:', VERIFY_TOKEN, '(tipo:', typeof VERIFY_TOKEN, ')');
+    console.log('Challenge:', challenge ? 'presente' : 'ausente');
+    console.log('Comparação mode:', mode === 'subscribe');
+    console.log('Comparação token:', token === VERIFY_TOKEN);
+    console.log('================================');
 
     if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
       console.log("✅ Webhook verificado com sucesso!");
       return res.status(200).send(challenge);
     } else {
       console.log("❌ Falha na verificação do webhook");
+      console.log('Motivo da falha:');
+      console.log('- Mode presente:', !!mode);
+      console.log('- Token presente:', !!token);
+      console.log('- Mode é subscribe:', mode === 'subscribe');
+      console.log('- Token confere:', token === VERIFY_TOKEN);
+      
       return res.status(403).json({ 
         error: 'Forbidden', 
-        message: 'Token de verificação inválido' 
+        message: 'Token de verificação inválido',
+        debug: {
+          receivedMode: mode,
+          receivedToken: token ? 'presente' : 'ausente',
+          expectedToken: 'awmssantos'
+        }
       });
     }
   } 
