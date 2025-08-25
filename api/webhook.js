@@ -1,73 +1,112 @@
+# Guia: Conectando Webhook WhatsApp com Supabase
+
+## 1. Verificação das Variáveis de Ambiente
+
+Primeiro, certifique-se de que as variáveis estão configuradas no Vercel:
+
+### No painel do Vercel:
+1. Vá para seu projeto
+2. Clique em **Settings** → **Environment Variables**
+3. Adicione:
+   - `SUPABASE_URL`: https://sdtujifxjivpvqmksrrj.supabase.co
+   - `SUPABASE_ANON_KEY`: ey.JhbGc... (sua chave completa)
+
+## 2. Estrutura do Banco de Dados
+
+Verifique se suas tabelas no Supabase estão configuradas corretamente:
+
+### Tabela `leads`:
+```sql
+CREATE TABLE leads (
+  id SERIAL PRIMARY KEY,
+  id_parceiro INTEGER NOT NULL,
+  contacts TEXT NOT NULL,
+  status BOOLEAN DEFAULT true,
+  criado_em TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Tabela `mensagem`:
+```sql
+CREATE TABLE mensagem (
+  id SERIAL PRIMARY KEY,
+  id_lead INTEGER REFERENCES leads(id),
+  remetente TEXT NOT NULL,
+  mensagem TEXT NOT NULL,
+  criado_em TIMESTAMP DEFAULT NOW()
+);
+```
+
+## 3. Configuração de Políticas RLS (Row Level Security)
+
+No Supabase SQL Editor, execute:
+
+```sql
+-- Habilitar RLS
+ALTER TABLE leads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE mensagem ENABLE ROW LEVEL SECURITY;
+
+-- Política para permitir operações com a chave anônima
+CREATE POLICY "Enable all operations for service role" ON leads
+FOR ALL USING (true);
+
+CREATE POLICY "Enable all operations for service role" ON mensagem
+FOR ALL USING (true);
+```
+
+## 4. Código do Webhook Otimizado
+
+Aqui está uma versão melhorada do seu webhook:
+
+```javascript
 export default async function handler(req, res) {
-  // Configuração CORS para Meta
+  // Configuração CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
   if (req.method === 'GET') {
-    const VERIFY_TOKEN = "awmssantos"; // Token de verificação
-    const mode = req.query['hub.mode'];
-    const token = req.query['hub.verify_token'];
-    const challenge = req.query['hub.challenge'];
+    const VERIFY_TOKEN = "awmssantos";
+    const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
 
-    // Se não tem parâmetros, é um teste direto no browser
     if (!mode && !token && !challenge) {
       return res.status(200).json({
         status: 'Webhook ativo',
-        message: 'Para testar, use: ?hub.mode=subscribe&hub.verify_token=awmssantos&hub.challenge=test',
+        message: 'Webhook funcionando',
         timestamp: new Date().toISOString()
       });
     }
 
-    if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
-      console.log("✅ Webhook verificado com sucesso!");
+    if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+      console.log("✅ Webhook verificado!");
       return res.status(200).send(challenge);
-    } else {
-      console.log("❌ Falha na verificação do webhook");
-      return res.status(403).json({ 
-        error: 'Forbidden', 
-        message: 'Token de verificação inválido'
-      });
     }
-  } 
-  
-  else if (req.method === 'POST') {
+
+    return res.status(403).json({ error: 'Token inválido' });
+  }
+
+  if (req.method === 'POST') {
     try {
-      console.log("📨 === WEBHOOK POST RECEBIDO ===");
-      console.log("Body completo:", JSON.stringify(req.body, null, 2));
-      console.log("================================");
+      console.log("📨 Webhook recebido:", JSON.stringify(req.body, null, 2));
       
       const { entry } = req.body;
       
-      if (entry && entry.length > 0) {
-        console.log(`🔄 Processando ${entry.length} entries...`);
-        
+      if (entry?.length > 0) {
         for (const pageEntry of entry) {
-          // Processar webhooks do WhatsApp Business API
           if (pageEntry.changes) {
-            console.log(`🔔 Encontradas ${pageEntry.changes.length} mudanças`);
             for (const change of pageEntry.changes) {
-              
-              // Processar mensagens do WhatsApp Business API
               if (change.field === 'messages' && change.value?.messages) {
-                console.log('📱 Processando mensagens do WhatsApp Business API');
                 for (const message of change.value.messages) {
-                  console.log('📨 Mensagem WA Business:', JSON.stringify(message, null, 2));
-                  
-                  // Extrair dados da mensagem
                   const senderId = message.from;
-                  const messageText = message.text?.body || message.type || 'Mensagem sem texto';
+                  const messageText = message.text?.body || `Mensagem ${message.type}`;
                   
-                  console.log(`📱 WhatsApp - De: ${senderId}, Mensagem: "${messageText}"`);
+                  console.log(`📱 Nova mensagem de ${senderId}: ${messageText}`);
                   
-                  // TENTAR SALVAR NO BANCO
-                  await tryToSaveToDatabase(senderId, messageText);
+                  await saveToDatabase(senderId, messageText);
                 }
               }
             }
@@ -75,136 +114,150 @@ export default async function handler(req, res) {
         }
       }
 
-      // Sempre retorna 200 para o Meta saber que recebeu
-      return res.status(200).json({ 
-        success: true, 
-        message: 'Evento processado com sucesso',
-        timestamp: new Date().toISOString()
-      });
+      return res.status(200).json({ success: true });
       
     } catch (error) {
-      console.error('❌ Erro ao processar evento:', error);
-      return res.status(500).json({ 
-        error: 'Internal Server Error',
-        message: error.message
-      });
+      console.error('❌ Erro:', error);
+      return res.status(500).json({ error: error.message });
     }
-  } 
-  
-  else {
-    res.setHeader("Allow", ["GET", "POST", "OPTIONS"]);
-    return res.status(405).json({
-      error: `Method ${req.method} Not Allowed`,
-      allowed: ["GET", "POST", "OPTIONS"]
-    });
   }
+
+  return res.status(405).json({ error: 'Method not allowed' });
 }
 
-// Função SIMPLES para tentar salvar no banco
-async function tryToSaveToDatabase(senderId, messageText) {
+// Função melhorada para salvar no banco
+async function saveToDatabase(senderId, messageText) {
   try {
-    console.log('💾 === TENTANDO SALVAR NO BANCO ===');
-    console.log('Contato:', senderId);
-    console.log('Mensagem:', messageText);
-    
-    // Verificar se as variáveis de ambiente existem
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_ANON_KEY;
     
     if (!supabaseUrl || !supabaseKey) {
-      console.log('⚠️ Variáveis do Supabase não configuradas.');
-      console.log('Configure SUPABASE_URL e SUPABASE_ANON_KEY no Vercel');
+      console.log('⚠️ Variáveis do Supabase não encontradas');
       return false;
     }
-    
-    console.log('✅ Variáveis do Supabase encontradas');
-    console.log('URL:', supabaseUrl);
-    
-    // USAR FETCH DIRETO (mais simples)
+
+    const headers = {
+      'apikey': supabaseKey,
+      'Authorization': `Bearer ${supabaseKey}`,
+      'Content-Type': 'application/json'
+    };
+
     // 1. Buscar lead existente
-    console.log('🔍 Buscando lead existente...');
+    const searchUrl = `${supabaseUrl}/rest/v1/leads?contacts=eq.${encodeURIComponent(senderId)}&status=eq.true&select=id`;
     
-    const searchResponse = await fetch(`${supabaseUrl}/rest/v1/leads?contacts=eq.${senderId}&status=eq.true&select=id`, {
-      headers: {
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    console.log('🔍 Buscando lead:', searchUrl);
+    
+    const searchResponse = await fetch(searchUrl, { headers });
+    
+    if (!searchResponse.ok) {
+      throw new Error(`Erro ao buscar lead: ${searchResponse.status}`);
+    }
     
     const existingLeads = await searchResponse.json();
-    console.log('Leads encontrados:', existingLeads);
-    
     let leadId;
-    
-    if (existingLeads && existingLeads.length > 0) {
-      // Lead existente encontrado
+
+    if (existingLeads?.length > 0) {
       leadId = existingLeads[0].id;
-      console.log('📋 Lead existente encontrado:', leadId);
+      console.log('📋 Lead existente:', leadId);
     } else {
-      // Criar novo lead
+      // 2. Criar novo lead
       console.log('🆕 Criando novo lead...');
       
-      const createLeadResponse = await fetch(`${supabaseUrl}/rest/v1/leads`, {
+      const createResponse = await fetch(`${supabaseUrl}/rest/v1/leads`, {
         method: 'POST',
-        headers: {
-          'apikey': supabaseKey,
-          'Authorization': `Bearer ${supabaseKey}`,
-          'Content-Type': 'application/json',
-          'Prefer': 'return=representation'
-        },
+        headers: { ...headers, 'Prefer': 'return=representation' },
         body: JSON.stringify({
           id_parceiro: 1,
           contacts: senderId,
-          status: true,
-          criado_em: new Date().toISOString()
+          status: true
         })
       });
-      
-      const newLead = await createLeadResponse.json();
-      console.log('Resposta criação lead:', newLead);
-      
-      if (newLead && newLead.length > 0) {
-        leadId = newLead[0].id;
-        console.log('✅ Novo lead criado:', leadId);
-      } else {
-        console.log('❌ Erro ao criar lead:', newLead);
-        return false;
+
+      if (!createResponse.ok) {
+        throw new Error(`Erro ao criar lead: ${createResponse.status}`);
       }
+
+      const newLead = await createResponse.json();
+      leadId = newLead[0]?.id;
+      
+      if (!leadId) {
+        throw new Error('Lead não foi criado');
+      }
+      
+      console.log('✅ Novo lead criado:', leadId);
     }
-    
-    // 2. Salvar mensagem
+
+    // 3. Salvar mensagem
     console.log('💬 Salvando mensagem...');
     
-    const saveMessageResponse = await fetch(`${supabaseUrl}/rest/v1/mensagem`, {
+    const messageResponse = await fetch(`${supabaseUrl}/rest/v1/mensagem`, {
       method: 'POST',
-      headers: {
-        'apikey': supabaseKey,
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      },
+      headers: { ...headers, 'Prefer': 'return=representation' },
       body: JSON.stringify({
         id_lead: leadId,
         remetente: 'client',
-        mensagem: messageText,
-        criado_em: new Date().toISOString()
+        mensagem: messageText
       })
     });
-    
-    const savedMessage = await saveMessageResponse.json();
-    console.log('Resposta salvar mensagem:', savedMessage);
-    
-    if (savedMessage && savedMessage.length > 0) {
-      console.log('✅ Mensagem salva com sucesso!');
-      return true;
-    } else {
-      console.log('❌ Erro ao salvar mensagem:', savedMessage);
-      return false;
+
+    if (!messageResponse.ok) {
+      throw new Error(`Erro ao salvar mensagem: ${messageResponse.status}`);
     }
+
+    const savedMessage = await messageResponse.json();
+    console.log('✅ Mensagem salva:', savedMessage[0]?.id);
     
+    return true;
+
   } catch (error) {
-    console.error('❌ Erro geral ao salvar no banco:', error);
+    console.error('❌ Erro ao salvar:', error);
     return false;
+  }
+}
+```
+
+## 5. Testes
+
+### Teste 1 - Verificação do Webhook:
+```bash
+curl "https://seu-webhook.vercel.app/api/webhook?hub.mode=subscribe&hub.verify_token=awmssantos&hub.challenge=test"
+```
+
+### Teste 2 - Teste de Conexão com DB:
+Crie um arquivo `/api/test-db.js`:
+
+```javascript
+export default async function handler(req, res) {
+  try {
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseKey) {
+      return res.status(500).json({ error: 'Variáveis não configuradas' });
+    }
+
+    // Teste de conexão
+    const response = await fetch(`${supabaseUrl}/rest/v1/leads?limit=1`, {
+      headers: {
+        'apikey': supabaseKey,
+        'Authorization': `Bearer ${supabaseKey}`
+      }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return res.json({ 
+        success: true, 
+        message: 'Conexão OK',
+        sample: data 
+      });
+    } else {
+      return res.status(500).json({ 
+        error: 'Erro na conexão',
+        status: response.status 
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
   }
 }
