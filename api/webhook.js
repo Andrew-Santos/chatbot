@@ -150,20 +150,34 @@ async function processMessage(messagingEvent) {
 // Função para buscar ou criar um lead
 async function findOrCreateLead(contacts) {
   try {
-    // Primeiro, tenta encontrar um lead existente
-    const { data: existingLead, error: findError } = await supabase
+    // Primeiro, busca por um lead ativo (status=true)
+    const { data: activeLead, error: findActiveError } = await supabase
       .from('leads')
-      .select('id')
+      .select('id, status')
       .eq('contacts', contacts)
       .eq('status', true)
-      .single();
+      .maybeSingle(); // usa maybeSingle para não dar erro se não encontrar
     
-    if (existingLead) {
-      console.log('📋 Lead existente encontrado:', existingLead.id);
-      return existingLead.id;
+    if (activeLead) {
+      console.log('📋 Lead ativo encontrado:', activeLead.id);
+      return activeLead.id;
     }
     
-    // Se não encontrou, cria um novo lead
+    // Se não encontrou lead ativo, verifica se existe algum lead encerrado
+    const { data: inactiveLead, error: findInactiveError } = await supabase
+      .from('leads')
+      .select('id, status')
+      .eq('contacts', contacts)
+      .eq('status', false)
+      .maybeSingle();
+    
+    if (inactiveLead) {
+      console.log('🔒 Lead encerrado encontrado para este contato. Criando novo lead...');
+    } else {
+      console.log('👤 Primeiro contato deste número. Criando novo lead...');
+    }
+    
+    // Cria um novo lead (seja primeiro contato ou reativação)
     const { data: newLead, error: createError } = await supabase
       .from('leads')
       .insert({
