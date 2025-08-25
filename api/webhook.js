@@ -1,4 +1,11 @@
-export default function handler(req, res) {
+import { createClient } from '@supabase/supabase-js';
+
+// Configuração do Supabase (substitua pelas suas credenciais)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+export default async function handler(req, res) {
   // Configuração CORS para Meta
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -63,28 +70,27 @@ export default function handler(req, res) {
     try {
       console.log("📨 Evento recebido do Meta:", JSON.stringify(req.body, null, 2));
       
-      // Processa os dados recebidos
       const { entry } = req.body;
       
       if (entry && entry.length > 0) {
-        entry.forEach(pageEntry => {
+        for (const pageEntry of entry) {
           console.log('Page Entry:', pageEntry);
           
-          // Aqui você pode processar diferentes tipos de eventos
+          // Processar mensagens do WhatsApp/Messenger
           if (pageEntry.messaging) {
-            pageEntry.messaging.forEach(messagingEvent => {
-              console.log('Messaging Event:', messagingEvent);
-              // Processar mensagens aqui
-            });
+            for (const messagingEvent of pageEntry.messaging) {
+              await processMessage(messagingEvent);
+            }
           }
           
+          // Processar outros tipos de mudanças
           if (pageEntry.changes) {
-            pageEntry.changes.forEach(change => {
+            for (const change of pageEntry.changes) {
               console.log('Change Event:', change);
-              // Processar mudanças aqui
-            });
+              // Aqui você pode processar outros tipos de eventos
+            }
           }
-        });
+        }
       }
 
       // Sempre retorna 200 para o Meta saber que recebeu
@@ -109,5 +115,100 @@ export default function handler(req, res) {
       error: `Method ${req.method} Not Allowed`,
       allowed: ["GET", "POST", "OPTIONS"]
     });
+  }
+}
+
+// Função para processar mensagens e salvar no banco
+async function processMessage(messagingEvent) {
+  try {
+    console.log('🔄 Processando mensagem:', messagingEvent);
+    
+    // Extrair dados da mensagem
+    const senderId = messagingEvent.sender?.id;
+    const message = messagingEvent.message?.text || 
+                   messagingEvent.message?.attachments?.[0]?.type || 
+                   'Mensagem sem texto';
+    
+    if (!senderId) {
+      console.log('❌ Sender ID não encontrado');
+      return;
+    }
+
+    // 1. Buscar ou criar lead
+    let leadId = await findOrCreateLead(senderId);
+    
+    // 2. Salvar mensagem
+    await saveMensagem(leadId, message);
+    
+    console.log('✅ Mensagem processada com sucesso');
+    
+  } catch (error) {
+    console.error('❌ Erro ao processar mensagem:', error);
+  }
+}
+
+// Função para buscar ou criar um lead
+async function findOrCreateLead(contacts) {
+  try {
+    // Primeiro, tenta encontrar um lead existente
+    const { data: existingLead, error: findError } = await supabase
+      .from('leads')
+      .select('id')
+      .eq('contacts', contacts)
+      .eq('status', true)
+      .single();
+    
+    if (existingLead) {
+      console.log('📋 Lead existente encontrado:', existingLead.id);
+      return existingLead.id;
+    }
+    
+    // Se não encontrou, cria um novo lead
+    const { data: newLead, error: createError } = await supabase
+      .from('leads')
+      .insert({
+        id_parceiro: 1, // Fixo como 1 conforme solicitado
+        contacts: contacts,
+        status: true,
+        criado_em: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+    
+    if (createError) {
+      throw createError;
+    }
+    
+    console.log('🆕 Novo lead criado:', newLead.id);
+    return newLead.id;
+    
+  } catch (error) {
+    console.error('❌ Erro ao buscar/criar lead:', error);
+    throw error;
+  }
+}
+
+// Função para salvar mensagem
+async function saveMensagem(leadId, mensagem) {
+  try {
+    const { data, error } = await supabase
+      .from('mensagem')
+      .insert({
+        id_lead: leadId,
+        remetente: 'client', // Fixo como 'client' conforme solicitado
+        mensagem: mensagem,
+        criado_em: new Date().toISOString()
+      });
+    
+    if (error) {
+      throw error;
+    }
+    
+    console.log('💬 Mensagem salva no banco');
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Erro ao salvar mensagem:', error);
+    throw error;
   }
 }
