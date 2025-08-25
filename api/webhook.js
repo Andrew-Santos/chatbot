@@ -211,15 +211,83 @@ async function saveToDatabase(senderId, messageText, platform) {
       return;
     }
     
-    // Importar Supabase dinamicamente para evitar erro se não estiver instalado
+    // Importar Supabase usando CDN se não estiver disponível via npm
     let supabase;
     try {
+      // Tentar importar via npm primeiro
       const { createClient } = await import('@supabase/supabase-js');
       supabase = createClient(supabaseUrl, supabaseKey);
-      console.log('✅ Conexão com Supabase estabelecida');
+      console.log('✅ Conexão com Supabase estabelecida via NPM');
     } catch (importError) {
-      console.log('⚠️ @supabase/supabase-js não instalado. Instale com: npm install @supabase/supabase-js');
-      return;
+      try {
+        // Se não conseguir via npm, tentar usar fetch diretamente
+        console.log('⚠️ Usando conexão direta com Supabase via fetch');
+        supabase = {
+          from: (table) => ({
+            select: (columns = '*') => ({
+              eq: (column, value) => ({
+                maybeSingle: async () => {
+                  const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${column}=eq.${value}&select=${columns}`, {
+                    headers: {
+                      'apikey': supabaseKey,
+                      'Authorization': `Bearer ${supabaseKey}`,
+                      'Content-Type': 'application/json'
+                    }
+                  });
+                  const data = await response.json();
+                  return { data: data.length > 0 ? data[0] : null, error: null };
+                },
+                single: async () => {
+                  const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${column}=eq.${value}&select=${columns}`, {
+                    headers: {
+                      'apikey': supabaseKey,
+                      'Authorization': `Bearer ${supabaseKey}`,
+                      'Content-Type': 'application/json'
+                    }
+                  });
+                  const data = await response.json();
+                  return { data: data[0] || null, error: data.length === 0 ? 'No data' : null };
+                }
+              })
+            }),
+            insert: (data) => ({
+              select: (columns = '*') => ({
+                single: async () => {
+                  const response = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
+                    method: 'POST',
+                    headers: {
+                      'apikey': supabaseKey,
+                      'Authorization': `Bearer ${supabaseKey}`,
+                      'Content-Type': 'application/json',
+                      'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify(data)
+                  });
+                  const result = await response.json();
+                  return { data: result[0] || null, error: !response.ok ? result : null };
+                }
+              }),
+              select: async (columns = '*') => {
+                const response = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
+                  method: 'POST',
+                  headers: {
+                    'apikey': supabaseKey,
+                    'Authorization': `Bearer ${supabaseKey}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'return=representation'
+                  },
+                  body: JSON.stringify(data)
+                });
+                const result = await response.json();
+                return { data: result, error: !response.ok ? result : null };
+              }
+            })
+          })
+        };
+      } catch (fetchError) {
+        console.log('❌ Erro ao conectar com Supabase:', fetchError);
+        return;
+      }
     }
     
     // 1. Buscar ou criar lead
