@@ -1,33 +1,3 @@
-// Função para salvar mensagem
-async function saveMensagem(leadId, mensagem) {
-  try {
-    const { data, error } = await supabase
-      .from('mensagem')
-      .insert({
-        id_lead: leadId,
-        remetente: 'client', // Fixo como 'client' conforme solicitado
-        mensagem: mensagem,
-        criado_em: new Date().toISOString()
-      });
-    
-    if (error) {
-      throw error;
-    }
-    
-    console.log('💬 Mensagem salva no banco');
-    return data;
-    
-  } catch (error) {
-    console.error('❌ Erro ao salvar mensagem:', error);
-    throw error;
-  }
-}import { createClient } from '@supabase/supabase-js';
-
-// Configuração do Supabase (substitua pelas suas credenciais)
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
-
 export default async function handler(req, res) {
   // Configuração CORS para Meta
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -108,8 +78,8 @@ export default async function handler(req, res) {
           if (pageEntry.messaging) {
             console.log(`💬 Encontradas ${pageEntry.messaging.length} mensagens`);
             for (const messagingEvent of pageEntry.messaging) {
-              console.log('📨 Processando mensagem:', JSON.stringify(messagingEvent, null, 2));
-              await processMessage(messagingEvent);
+              console.log('📨 Processando mensagem Messenger:', JSON.stringify(messagingEvent, null, 2));
+              await processMessengerMessage(messagingEvent);
             }
           } else {
             console.log('❌ Nenhuma mensagem encontrada em pageEntry.messaging');
@@ -152,7 +122,8 @@ export default async function handler(req, res) {
       console.error('❌ Erro ao processar evento:', error);
       return res.status(500).json({ 
         error: 'Internal Server Error',
-        message: error.message 
+        message: error.message,
+        stack: error.stack 
       });
     }
   } 
@@ -166,87 +137,31 @@ export default async function handler(req, res) {
   }
 }
 
-// Função para processar mensagens e salvar no banco
-async function processMessage(messagingEvent) {
+// Função para processar mensagens do Messenger
+async function processMessengerMessage(messagingEvent) {
   try {
-    console.log('🔄 Processando mensagem:', messagingEvent);
+    console.log('🔄 Processando mensagem Messenger:', messagingEvent);
     
     // Extrair dados da mensagem
     const senderId = messagingEvent.sender?.id;
-    const message = messagingEvent.message?.text || 
-                   messagingEvent.message?.attachments?.[0]?.type || 
-                   'Mensagem sem texto';
+    const messageText = messagingEvent.message?.text || 
+                       messagingEvent.message?.attachments?.[0]?.type || 
+                       'Mensagem sem texto';
     
     if (!senderId) {
       console.log('❌ Sender ID não encontrado');
       return;
     }
 
-    // 1. Buscar ou criar lead
-    let leadId = await findOrCreateLead(senderId);
-    
-    // 2. Salvar mensagem
-    await saveMensagem(leadId, message);
-    
-    console.log('✅ Mensagem processada com sucesso');
-    
-  } catch (error) {
-    console.error('❌ Erro ao processar mensagem:', error);
-  }
-}
+    console.log(`💬 Messenger - De: ${senderId}, Mensagem: "${messageText}"`);
 
-// Função para buscar ou criar um lead
-async function findOrCreateLead(contacts) {
-  try {
-    // Primeiro, busca por um lead ativo (status=true)
-    const { data: activeLead, error: findActiveError } = await supabase
-      .from('leads')
-      .select('id, status')
-      .eq('contacts', contacts)
-      .eq('status', true)
-      .maybeSingle(); // usa maybeSingle para não dar erro se não encontrar
+    // Por enquanto só logamos - depois vamos salvar no banco
+    await saveToDatabase(senderId, messageText, 'messenger');
     
-    if (activeLead) {
-      console.log('📋 Lead ativo encontrado:', activeLead.id);
-      return activeLead.id;
-    }
-    
-    // Se não encontrou lead ativo, verifica se existe algum lead encerrado
-    const { data: inactiveLead, error: findInactiveError } = await supabase
-      .from('leads')
-      .select('id, status')
-      .eq('contacts', contacts)
-      .eq('status', false)
-      .maybeSingle();
-    
-    if (inactiveLead) {
-      console.log('🔒 Lead encerrado encontrado para este contato. Criando novo lead...');
-    } else {
-      console.log('👤 Primeiro contato deste número. Criando novo lead...');
-    }
-    
-    // Cria um novo lead (seja primeiro contato ou reativação)
-    const { data: newLead, error: createError } = await supabase
-      .from('leads')
-      .insert({
-        id_parceiro: 1, // Fixo como 1 conforme solicitado
-        contacts: contacts,
-        status: true,
-        criado_em: new Date().toISOString()
-      })
-      .select('id')
-      .single();
-    
-    if (createError) {
-      throw createError;
-    }
-    
-    console.log('🆕 Novo lead criado:', newLead.id);
-    return newLead.id;
+    console.log('✅ Mensagem Messenger processada com sucesso');
     
   } catch (error) {
-    console.error('❌ Erro ao buscar/criar lead:', error);
-    throw error;
+    console.error('❌ Erro ao processar mensagem Messenger:', error);
   }
 }
 
@@ -266,17 +181,32 @@ async function processWhatsAppMessage(message, value) {
       return;
     }
 
-    console.log(`📱 De: ${senderId}, Mensagem: "${messageText}"`);
+    console.log(`📱 WhatsApp - De: ${senderId}, Mensagem: "${messageText}"`);
 
-    // 1. Buscar ou criar lead
-    let leadId = await findOrCreateLead(senderId);
-    
-    // 2. Salvar mensagem
-    await saveMensagem(leadId, messageText);
+    // Por enquanto só logamos - depois vamos salvar no banco
+    await saveToDatabase(senderId, messageText, 'whatsapp');
     
     console.log('✅ Mensagem WhatsApp processada com sucesso');
     
   } catch (error) {
     console.error('❌ Erro ao processar mensagem WhatsApp:', error);
+  }
+}
+
+// Função temporária para simular salvamento no banco
+async function saveToDatabase(senderId, messageText, platform) {
+  try {
+    console.log('💾 === DADOS PARA SALVAR NO BANCO ===');
+    console.log('Plataforma:', platform);
+    console.log('Sender ID (contacts):', senderId);
+    console.log('Mensagem:', messageText);
+    console.log('Timestamp:', new Date().toISOString());
+    console.log('=====================================');
+    
+    // TODO: Aqui vamos integrar com Supabase depois
+    // Por enquanto só logamos os dados
+    
+  } catch (error) {
+    console.error('❌ Erro ao salvar no banco:', error);
   }
 }
