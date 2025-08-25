@@ -1,4 +1,27 @@
-import { createClient } from '@supabase/supabase-js';
+// Função para salvar mensagem
+async function saveMensagem(leadId, mensagem) {
+  try {
+    const { data, error } = await supabase
+      .from('mensagem')
+      .insert({
+        id_lead: leadId,
+        remetente: 'client', // Fixo como 'client' conforme solicitado
+        mensagem: mensagem,
+        criado_em: new Date().toISOString()
+      });
+    
+    if (error) {
+      throw error;
+    }
+    
+    console.log('💬 Mensagem salva no banco');
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Erro ao salvar mensagem:', error);
+    throw error;
+  }
+}import { createClient } from '@supabase/supabase-js';
 
 // Configuração do Supabase (substitua pelas suas credenciais)
 const supabaseUrl = process.env.SUPABASE_URL;
@@ -68,36 +91,61 @@ export default async function handler(req, res) {
   
   else if (req.method === 'POST') {
     try {
-      console.log("📨 Evento recebido do Meta:", JSON.stringify(req.body, null, 2));
+      console.log("📨 === WEBHOOK POST RECEBIDO ===");
+      console.log("Headers:", req.headers);
+      console.log("Body completo:", JSON.stringify(req.body, null, 2));
+      console.log("================================");
       
       const { entry } = req.body;
       
       if (entry && entry.length > 0) {
+        console.log(`🔄 Processando ${entry.length} entries...`);
+        
         for (const pageEntry of entry) {
-          console.log('Page Entry:', pageEntry);
+          console.log('📄 Page Entry completa:', JSON.stringify(pageEntry, null, 2));
           
           // Processar mensagens do WhatsApp/Messenger
           if (pageEntry.messaging) {
+            console.log(`💬 Encontradas ${pageEntry.messaging.length} mensagens`);
             for (const messagingEvent of pageEntry.messaging) {
+              console.log('📨 Processando mensagem:', JSON.stringify(messagingEvent, null, 2));
               await processMessage(messagingEvent);
             }
+          } else {
+            console.log('❌ Nenhuma mensagem encontrada em pageEntry.messaging');
           }
           
-          // Processar outros tipos de mudanças
+          // Processar webhooks do WhatsApp Business API
           if (pageEntry.changes) {
+            console.log(`🔔 Encontradas ${pageEntry.changes.length} mudanças`);
             for (const change of pageEntry.changes) {
-              console.log('Change Event:', change);
-              // Aqui você pode processar outros tipos de eventos
+              console.log('🔄 Change Event:', JSON.stringify(change, null, 2));
+              
+              // Processar mensagens do WhatsApp Business API
+              if (change.field === 'messages' && change.value?.messages) {
+                console.log('📱 Processando mensagens do WhatsApp Business API');
+                for (const message of change.value.messages) {
+                  console.log('📨 Mensagem WA Business:', JSON.stringify(message, null, 2));
+                  await processWhatsAppMessage(message, change.value);
+                }
+              }
             }
+          } else {
+            console.log('❌ Nenhuma mudança encontrada em pageEntry.changes');
           }
         }
+      } else {
+        console.log('❌ Nenhuma entry encontrada no body');
+        console.log('Body recebido:', req.body);
       }
 
       // Sempre retorna 200 para o Meta saber que recebeu
       return res.status(200).json({ 
         success: true, 
         message: 'Evento processado com sucesso',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        received: !!req.body,
+        entries: entry?.length || 0
       });
       
     } catch (error) {
@@ -202,27 +250,33 @@ async function findOrCreateLead(contacts) {
   }
 }
 
-// Função para salvar mensagem
-async function saveMensagem(leadId, mensagem) {
+// Função para processar mensagens do WhatsApp Business API
+async function processWhatsAppMessage(message, value) {
   try {
-    const { data, error } = await supabase
-      .from('mensagem')
-      .insert({
-        id_lead: leadId,
-        remetente: 'client', // Fixo como 'client' conforme solicitado
-        mensagem: mensagem,
-        criado_em: new Date().toISOString()
-      });
+    console.log('🔄 Processando mensagem WhatsApp Business:', message);
     
-    if (error) {
-      throw error;
+    // Extrair dados da mensagem
+    const senderId = message.from;
+    const messageText = message.text?.body || 
+                       message.type || 
+                       'Mensagem sem texto';
+    
+    if (!senderId) {
+      console.log('❌ Sender ID não encontrado');
+      return;
     }
+
+    console.log(`📱 De: ${senderId}, Mensagem: "${messageText}"`);
+
+    // 1. Buscar ou criar lead
+    let leadId = await findOrCreateLead(senderId);
     
-    console.log('💬 Mensagem salva no banco');
-    return data;
+    // 2. Salvar mensagem
+    await saveMensagem(leadId, messageText);
+    
+    console.log('✅ Mensagem WhatsApp processada com sucesso');
     
   } catch (error) {
-    console.error('❌ Erro ao salvar mensagem:', error);
-    throw error;
+    console.error('❌ Erro ao processar mensagem WhatsApp:', error);
   }
 }
