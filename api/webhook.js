@@ -27,6 +27,15 @@ export default function handler(req, res) {
     console.log('Comparação token:', token === VERIFY_TOKEN);
     console.log('================================');
 
+    // Se não tem parâmetros, é um teste direto no browser
+    if (!mode && !token && !challenge) {
+      return res.status(200).json({
+        status: 'Webhook ativo',
+        message: 'Para testar, use: ?hub.mode=subscribe&hub.verify_token=awmssantos&hub.challenge=test',
+        timestamp: new Date().toISOString()
+      });
+    }
+
     if (mode && token && mode === 'subscribe' && token === VERIFY_TOKEN) {
       console.log("✅ Webhook verificado com sucesso!");
       return res.status(200).send(challenge);
