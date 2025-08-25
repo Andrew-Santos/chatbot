@@ -196,17 +196,136 @@ async function processWhatsAppMessage(message, value) {
 // Função temporária para simular salvamento no banco
 async function saveToDatabase(senderId, messageText, platform) {
   try {
-    console.log('💾 === DADOS PARA SALVAR NO BANCO ===');
+    console.log('💾 === SALVANDO NO BANCO DE DADOS ===');
     console.log('Plataforma:', platform);
     console.log('Sender ID (contacts):', senderId);
     console.log('Mensagem:', messageText);
     console.log('Timestamp:', new Date().toISOString());
-    console.log('=====================================');
     
-    // TODO: Aqui vamos integrar com Supabase depois
-    // Por enquanto só logamos os dados
+    // Verificar se as variáveis de ambiente existem
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseKey) {
+      console.log('⚠️ Variáveis do Supabase não configuradas. Configure SUPABASE_URL e SUPABASE_ANON_KEY');
+      return;
+    }
+    
+    // Importar Supabase dinamicamente para evitar erro se não estiver instalado
+    let supabase;
+    try {
+      const { createClient } = await import('@supabase/supabase-js');
+      supabase = createClient(supabaseUrl, supabaseKey);
+      console.log('✅ Conexão com Supabase estabelecida');
+    } catch (importError) {
+      console.log('⚠️ @supabase/supabase-js não instalado. Instale com: npm install @supabase/supabase-js');
+      return;
+    }
+    
+    // 1. Buscar ou criar lead
+    const leadId = await findOrCreateLead(supabase, senderId);
+    
+    // 2. Salvar mensagem
+    await saveMensagem(supabase, leadId, messageText);
+    
+    console.log('✅ Dados salvos no banco com sucesso!');
     
   } catch (error) {
     console.error('❌ Erro ao salvar no banco:', error);
+  }
+}
+
+// Função para buscar ou criar um lead
+async function findOrCreateLead(supabase, contacts) {
+  try {
+    console.log('🔍 Buscando lead ativo para contato:', contacts);
+    
+    // Primeiro, busca por um lead ativo (status=true)
+    const { data: activeLead, error: findActiveError } = await supabase
+      .from('leads')
+      .select('id, status')
+      .eq('contacts', contacts)
+      .eq('status', true)
+      .maybeSingle();
+    
+    if (findActiveError) {
+      console.log('❌ Erro ao buscar lead ativo:', findActiveError);
+    }
+    
+    if (activeLead) {
+      console.log('📋 Lead ativo encontrado:', activeLead.id);
+      return activeLead.id;
+    }
+    
+    // Se não encontrou lead ativo, verifica se existe algum lead encerrado
+    const { data: inactiveLead, error: findInactiveError } = await supabase
+      .from('leads')
+      .select('id, status')
+      .eq('contacts', contacts)
+      .eq('status', false)
+      .maybeSingle();
+    
+    if (findInactiveError) {
+      console.log('❌ Erro ao buscar lead inativo:', findInactiveError);
+    }
+    
+    if (inactiveLead) {
+      console.log('🔒 Lead encerrado encontrado para este contato. Criando novo lead...');
+    } else {
+      console.log('👤 Primeiro contato deste número. Criando novo lead...');
+    }
+    
+    // Cria um novo lead (seja primeiro contato ou reativação)
+    const { data: newLead, error: createError } = await supabase
+      .from('leads')
+      .insert({
+        id_parceiro: 1, // Fixo como 1 conforme solicitado
+        contacts: contacts,
+        status: true,
+        criado_em: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+    
+    if (createError) {
+      console.log('❌ Erro ao criar lead:', createError);
+      throw createError;
+    }
+    
+    console.log('🆕 Novo lead criado:', newLead.id);
+    return newLead.id;
+    
+  } catch (error) {
+    console.error('❌ Erro geral ao buscar/criar lead:', error);
+    throw error;
+  }
+}
+
+// Função para salvar mensagem
+async function saveMensagem(supabase, leadId, mensagem) {
+  try {
+    console.log('💬 Salvando mensagem para lead ID:', leadId);
+    
+    const { data, error } = await supabase
+      .from('mensagem')
+      .insert({
+        id_lead: leadId,
+        remetente: 'client', // Fixo como 'client' conforme solicitado
+        mensagem: mensagem,
+        criado_em: new Date().toISOString()
+      })
+      .select();
+    
+    if (error) {
+      console.log('❌ Erro ao salvar mensagem:', error);
+      throw error;
+    }
+    
+    console.log('💬 Mensagem salva no banco com sucesso:', data);
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Erro geral ao salvar mensagem:', error);
+    throw error;
   }
 }
