@@ -440,7 +440,7 @@ async function sendFlowMessage(senderId) {
         'Authorization': `Bearer ${whatsappToken}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(whatsappPayload)
     });
 
     const responseText = await whatsappResponse.text();
