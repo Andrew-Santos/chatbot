@@ -115,7 +115,7 @@ async function saveToDatabase(senderId, messageText) {
       return false;
     }
 
-    console.log('🔍 Salvando no banco:', senderId, messageText);
+    console.log('💾 Salvando no banco:', senderId, messageText);
 
     const headers = {
       'apikey': supabaseKey,
@@ -262,6 +262,10 @@ async function sendSimpleMessage(senderId, messageText) {
     return false;
   }
 }
+
+/* ============================================================
+   🔹 Função para enviar fluxo com nova estrutura do BD
+   ============================================================ */
 async function sendFlowMessage(senderId) {
   try {
     console.log('🚀 Iniciando envio do fluxo para:', senderId);
@@ -280,29 +284,55 @@ async function sendFlowMessage(senderId) {
       'Content-Type': 'application/json'
     };
 
-    // 1. Buscar mensagem inicial (type=title)
-    console.log('🔍 Buscando mensagem título...');
-    const titleUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.title&order=ordem.asc&limit=1`;
-    const titleResponse = await fetch(titleUrl, { headers });
+    // 1. Buscar mensagem do corpo (type=body)
+    console.log('🔍 Buscando mensagem body...');
+    const bodyUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.body&order=ordem.asc&limit=1`;
+    const bodyResponse = await fetch(bodyUrl, { headers });
     
-    if (!titleResponse.ok) {
-      console.error('❌ Erro ao buscar título:', titleResponse.status);
+    if (!bodyResponse.ok) {
+      console.error('❌ Erro ao buscar body:', bodyResponse.status);
       return false;
     }
     
-    const titleData = await titleResponse.json();
-    console.log('📋 Dados do título:', titleData);
+    const bodyData = await bodyResponse.json();
+    console.log('📋 Dados do body:', bodyData);
 
-    if (!titleData?.length) {
-      console.error('❌ Nenhuma mensagem de título encontrada');
+    if (!bodyData?.length) {
+      console.error('❌ Nenhuma mensagem de body encontrada');
       return false;
     }
 
-    const welcome = titleData[0];
+    const welcomeMessage = bodyData[0];
 
-    // 2. Buscar opções (type=option) - CORREÇÃO: buscar por type, não por id_parent
-    console.log('🔍 Buscando opções...');
-    const optionsUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.option&order=ordem.asc`;
+    // 2. Buscar header (type=header)
+    console.log('🔍 Buscando header...');
+    const headerUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.header&order=ordem.asc&limit=1`;
+    const headerResponse = await fetch(headerUrl, { headers });
+    
+    if (!headerResponse.ok) {
+      console.error('❌ Erro ao buscar header:', headerResponse.status);
+      return false;
+    }
+    
+    const headerData = await headerResponse.json();
+    const headerText = headerData?.length > 0 ? headerData[0].message : "✅ Matriz Class Jurídico";
+
+    // 3. Buscar footer (type=footer)
+    console.log('🔍 Buscando footer...');
+    const footerUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.footer&order=ordem.asc&limit=1`;
+    const footerResponse = await fetch(footerUrl, { headers });
+    
+    if (!footerResponse.ok) {
+      console.error('❌ Erro ao buscar footer:', footerResponse.status);
+      return false;
+    }
+    
+    const footerData = await footerResponse.json();
+    const footerText = footerData?.length > 0 ? footerData[0].message : "Selecione uma opção abaixo 👇";
+
+    // 4. Buscar opções (type=list)
+    console.log('🔍 Buscando opções da lista...');
+    const optionsUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.list&order=ordem.asc`;
     const optionsResponse = await fetch(optionsUrl, { headers });
     
     if (!optionsResponse.ok) {
@@ -318,7 +348,7 @@ async function sendFlowMessage(senderId) {
       return false;
     }
 
-    // 3. Verificar variáveis do WhatsApp
+    // 5. Verificar variáveis do WhatsApp
     const phoneNumberId = process.env.PHONE_NUMBER_ID;
     const whatsappToken = process.env.WHATSAPP_TOKEN;
 
@@ -329,12 +359,12 @@ async function sendFlowMessage(senderId) {
       return false;
     }
 
-    // 4. Enviar pelo WhatsApp Cloud API com Lista Interativa
+    // 6. Enviar pelo WhatsApp Cloud API com Lista Interativa
     console.log('📤 Enviando lista interativa via WhatsApp API...');
     const whatsappUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
     
     // Preparar opções para a lista
-    const listOptions = options.map((opt, i) => ({
+    const listOptions = options.map((opt) => ({
       id: `option_${opt.id}`,
       title: opt.message.substring(0, 24), // WhatsApp limita a 24 caracteres
       description: opt.message.length > 24 ? opt.message.substring(24, 72) : undefined // Descrição opcional até 72 chars
@@ -348,19 +378,18 @@ async function sendFlowMessage(senderId) {
         type: "list",
         header: {
           type: "text",
-          text: "✔️ Matriz Class Jurídico"
+          text: headerText
         },
         body: {
-          text: welcome.message
+          text: welcomeMessage.message
         },
         footer: {
-          text: "Selecione uma opção abaixo 👇"
+          text: footerText
         },
         action: {
           button: "Ver Opções",
           sections: [
             {
-              title: "Menu Principal",
               rows: listOptions
             }
           ]
