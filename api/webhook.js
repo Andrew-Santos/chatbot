@@ -1,3 +1,4 @@
+// Função principal exportada para o Vercel
 export default async function handler(req, res) {
   // Configuração CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -76,13 +77,21 @@ export default async function handler(req, res) {
 
                   // 1. Salvar mensagem recebida no Supabase
                   const saved = await saveToDatabase(senderId, messageText);
+                  console.log('💾 Resultado do salvamento:', saved);
                   
                   if (saved && !isInteractiveResponse) {
                     // 2. Responder com fluxo inicial (apenas para mensagens de texto normais)
-                    await sendFlowMessage(senderId);
+                    console.log('🔄 Iniciando envio do fluxo...');
+                    const flowSent = await sendFlowMessage(senderId);
+                    console.log('📤 Resultado do envio do fluxo:', flowSent);
                   } else if (saved && isInteractiveResponse) {
                     // 3. Processar resposta interativa (você pode implementar lógica específica aqui)
+                    console.log('🎯 Processando resposta interativa...');
                     await handleInteractiveResponse(senderId, message.interactive);
+                  } else {
+                    console.log('❌ Mensagem não foi salva ou condições não atendidas');
+                    console.log('- Saved:', saved);
+                    console.log('- IsInteractive:', isInteractiveResponse);
                   }
                 }
               }
@@ -287,18 +296,26 @@ async function sendFlowMessage(senderId) {
     // 1. Buscar mensagem do corpo (type=body)
     console.log('🔍 Buscando mensagem body...');
     const bodyUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.body&order=ordem.asc&limit=1`;
+    console.log('🔗 URL do body:', bodyUrl);
     const bodyResponse = await fetch(bodyUrl, { headers });
     
     if (!bodyResponse.ok) {
       console.error('❌ Erro ao buscar body:', bodyResponse.status);
+      const errorText = await bodyResponse.text();
+      console.error('❌ Detalhes do erro body:', errorText);
       return false;
     }
     
     const bodyData = await bodyResponse.json();
-    console.log('📋 Dados do body:', bodyData);
+    console.log('📋 Dados do body completos:', JSON.stringify(bodyData, null, 2));
 
     if (!bodyData?.length) {
       console.error('❌ Nenhuma mensagem de body encontrada');
+      // Vamos verificar se existem dados na tabela
+      const allDataUrl = `${supabaseUrl}/rest/v1/flow_option?select=*`;
+      const allDataResponse = await fetch(allDataUrl, { headers });
+      const allData = await allDataResponse.json();
+      console.log('🔍 Todos os dados da tabela:', JSON.stringify(allData, null, 2));
       return false;
     }
 
@@ -307,41 +324,52 @@ async function sendFlowMessage(senderId) {
     // 2. Buscar header (type=header)
     console.log('🔍 Buscando header...');
     const headerUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.header&order=ordem.asc&limit=1`;
+    console.log('🔗 URL do header:', headerUrl);
     const headerResponse = await fetch(headerUrl, { headers });
     
     if (!headerResponse.ok) {
       console.error('❌ Erro ao buscar header:', headerResponse.status);
+      const errorText = await headerResponse.text();
+      console.error('❌ Detalhes do erro header:', errorText);
       return false;
     }
     
     const headerData = await headerResponse.json();
+    console.log('📋 Dados do header:', JSON.stringify(headerData, null, 2));
     const headerText = headerData?.length > 0 ? headerData[0].message : "✅ Matriz Class Jurídico";
 
     // 3. Buscar footer (type=footer)
     console.log('🔍 Buscando footer...');
     const footerUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.footer&order=ordem.asc&limit=1`;
+    console.log('🔗 URL do footer:', footerUrl);
     const footerResponse = await fetch(footerUrl, { headers });
     
     if (!footerResponse.ok) {
       console.error('❌ Erro ao buscar footer:', footerResponse.status);
+      const errorText = await footerResponse.text();
+      console.error('❌ Detalhes do erro footer:', errorText);
       return false;
     }
     
     const footerData = await footerResponse.json();
+    console.log('📋 Dados do footer:', JSON.stringify(footerData, null, 2));
     const footerText = footerData?.length > 0 ? footerData[0].message : "Selecione uma opção abaixo 👇";
 
     // 4. Buscar opções (type=list)
     console.log('🔍 Buscando opções da lista...');
     const optionsUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.list&order=ordem.asc`;
+    console.log('🔗 URL das opções:', optionsUrl);
     const optionsResponse = await fetch(optionsUrl, { headers });
     
     if (!optionsResponse.ok) {
       console.error('❌ Erro ao buscar opções:', optionsResponse.status);
+      const errorText = await optionsResponse.text();
+      console.error('❌ Detalhes do erro opções:', errorText);
       return false;
     }
     
     const options = await optionsResponse.json();
-    console.log('📋 Opções encontradas:', options);
+    console.log('📋 Opções encontradas:', JSON.stringify(options, null, 2));
 
     if (!options?.length) {
       console.error('❌ Nenhuma opção encontrada');
