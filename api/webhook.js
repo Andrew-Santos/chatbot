@@ -67,7 +67,7 @@ export default async function handler(req, res) {
                       const selectedButton = message.interactive.button_reply;
                       messageText = `Clicou: ${selectedButton.title}`;
                       isInteractiveResponse = true;
-                      console.log('🔘 Botão clicado:', selectedButton);
+                      console.log('📘 Botão clicado:', selectedButton);
                     }
                   } else {
                     messageText = `Mensagem ${message.type}`;
@@ -76,7 +76,7 @@ export default async function handler(req, res) {
                   console.log(`📱 Nova mensagem de ${senderId}: ${messageText}${isInteractiveResponse ? ' (interativa)' : ''}`);
 
                   // 1. Salvar mensagem recebida no Supabase
-                  const saved = await saveToDatabase(senderId, messageText);
+                  const saved = await saveToDatabase(senderId, messageText, 'client');
                   console.log('💾 Resultado do salvamento:', saved);
                   
                   if (saved && !isInteractiveResponse) {
@@ -85,7 +85,7 @@ export default async function handler(req, res) {
                     const flowSent = await sendFlowMessage(senderId);
                     console.log('📤 Resultado do envio do fluxo:', flowSent);
                   } else if (saved && isInteractiveResponse) {
-                    // 3. Processar resposta interativa (você pode implementar lógica específica aqui)
+                    // 3. Processar resposta interativa
                     console.log('🎯 Processando resposta interativa...');
                     await handleInteractiveResponse(senderId, message.interactive);
                   } else {
@@ -112,9 +112,9 @@ export default async function handler(req, res) {
 }
 
 /* ============================================================
-   🔹 Função para salvar a mensagem recebida no Supabase
+   🔹 Função para salvar a mensagem no Supabase
    ============================================================ */
-async function saveToDatabase(senderId, messageText) {
+async function saveToDatabase(senderId, messageText, sender = 'client') {
   try {
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_ANON_KEY;
@@ -124,7 +124,7 @@ async function saveToDatabase(senderId, messageText) {
       return false;
     }
 
-    console.log('💾 Salvando no banco:', senderId, messageText);
+    console.log('💾 Salvando no banco:', senderId, messageText, `(${sender})`);
 
     const headers = {
       'apikey': supabaseKey,
@@ -176,7 +176,7 @@ async function saveToDatabase(senderId, messageText) {
       headers: { ...headers, 'Prefer': 'return=representation' },
       body: JSON.stringify({
         id_lead: leadId,
-        remetente: 'client',
+        remetente: sender, // 'client' ou 'bot'
         mensagem: messageText
       })
     });
@@ -187,9 +187,9 @@ async function saveToDatabase(senderId, messageText) {
     }
     
     const savedMessage = await messageResponse.json();
-    console.log('✅ Mensagem salva:', savedMessage[0]?.id);
+    console.log(`✅ Mensagem ${sender} salva:`, savedMessage[0]?.id);
 
-    return true;
+    return leadId; // Retorna o leadId para uso posterior
 
   } catch (error) {
     console.error('❌ Erro ao salvar no Supabase:', error);
@@ -204,23 +204,29 @@ async function handleInteractiveResponse(senderId, interactive) {
   try {
     console.log('🎯 Processando resposta interativa para:', senderId);
     
+    let responseMessage = '';
+    
     if (interactive.type === 'list_reply') {
       const selectedOption = interactive.list_reply;
       const optionId = selectedOption.id; // exemplo: "option_2"
       
       console.log('📋 Usuário selecionou:', selectedOption.title, 'ID:', optionId);
-      
-      // Aqui você pode implementar a lógica para cada opção
-      // Por exemplo, buscar próximo fluxo baseado na opção selecionada
-      
-      // Enviar confirmação
-      await sendSimpleMessage(senderId, `✅ Você selecionou: ${selectedOption.title}\n\nEm breve nossa equipe entrará em contato!`);
+      responseMessage = `✅ Você selecionou: ${selectedOption.title}\n\nEm breve nossa equipe entrará em contato!`;
       
     } else if (interactive.type === 'button_reply') {
       const selectedButton = interactive.button_reply;
-      console.log('🔘 Usuário clicou:', selectedButton.title);
+      console.log('📘 Usuário clicou:', selectedButton.title);
+      responseMessage = `✅ Opção confirmada: ${selectedButton.title}`;
+    }
+    
+    if (responseMessage) {
+      // Enviar mensagem de confirmação
+      const messageSent = await sendSimpleMessage(senderId, responseMessage);
       
-      await sendSimpleMessage(senderId, `✅ Opção confirmada: ${selectedButton.title}`);
+      // Salvar a mensagem do bot no banco de dados
+      if (messageSent) {
+        await saveToDatabase(senderId, responseMessage, 'bot');
+      }
     }
     
   } catch (error) {
@@ -434,7 +440,7 @@ async function sendFlowMessage(senderId) {
         'Authorization': `Bearer ${whatsappToken}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(whatsappPayload)
+      body: JSON.stringify(payload)
     });
 
     const responseText = await whatsappResponse.text();
@@ -444,6 +450,21 @@ async function sendFlowMessage(senderId) {
       console.error('❌ Erro ao enviar WhatsApp:', whatsappResponse.status, responseText);
       return false;
     }
+
+    // 7. 🔹 NOVO: Salvar a mensagem interativa enviada pelo bot
+    console.log('💾 Salvando mensagem do bot no banco de dados...');
+    
+    // Criar uma representação em texto da mensagem interativa
+    const botMessageText = `📋 ${headerText}
+
+${welcomeMessage.message}
+
+${footerText}
+
+Opções disponíveis:
+${options.map((opt, index) => `${index + 1}. ${opt.message}`).join('\n')}`;
+
+    await saveToDatabase(senderId, botMessageText, 'bot');
 
     console.log("✅ Fluxo enviado com sucesso para", senderId);
     return true;
