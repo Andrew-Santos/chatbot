@@ -10,7 +10,7 @@ export default async function handler(req, res) {
 
   // 🔹 Validação do Webhook do Meta
   if (req.method === 'GET') {
-    const VERIFY_TOKEN = "awmssantos"; // coloque o mesmo token configurado no Meta
+    const VERIFY_TOKEN = "awmssantos";
     const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
 
     if (!mode && !token && !challenge) {
@@ -42,16 +42,24 @@ export default async function handler(req, res) {
             for (const change of pageEntry.changes) {
               if (change.field === 'messages' && change.value?.messages) {
                 for (const message of change.value.messages) {
-                  const senderId = message.from; // número do usuário
+                  // 🔹 CORREÇÃO: Verificar se não é uma mensagem enviada pelo bot
+                  if (change.value?.metadata?.phone_number_id === message.from) {
+                    console.log("🤖 Mensagem enviada pelo bot, ignorando...");
+                    continue;
+                  }
+
+                  const senderId = message.from;
                   const messageText = message.text?.body || `Mensagem ${message.type}`;
 
                   console.log(`📱 Nova mensagem de ${senderId}: ${messageText}`);
 
                   // 1. Salvar mensagem recebida no Supabase
-                  await saveToDatabase(senderId, messageText);
-
-                  // 2. Responder com fluxo inicial
-                  await sendFlowMessage(senderId);
+                  const saved = await saveToDatabase(senderId, messageText);
+                  
+                  if (saved) {
+                    // 2. Responder com fluxo inicial
+                    await sendFlowMessage(senderId);
+                  }
                 }
               }
             }
@@ -83,6 +91,8 @@ async function saveToDatabase(senderId, messageText) {
       return false;
     }
 
+    console.log('🔍 Salvando no banco:', senderId, messageText);
+
     const headers = {
       'apikey': supabaseKey,
       'Authorization': `Bearer ${supabaseKey}`,
@@ -93,7 +103,10 @@ async function saveToDatabase(senderId, messageText) {
     const searchUrl = `${supabaseUrl}/rest/v1/leads?contacts=eq.${encodeURIComponent(senderId)}&status=eq.true&select=id`;
 
     const searchResponse = await fetch(searchUrl, { headers });
-    if (!searchResponse.ok) throw new Error(`Erro ao buscar lead: ${searchResponse.status}`);
+    if (!searchResponse.ok) {
+      console.error('❌ Erro ao buscar lead:', searchResponse.status);
+      return false;
+    }
 
     const existingLeads = await searchResponse.json();
     let leadId;
@@ -113,7 +126,11 @@ async function saveToDatabase(senderId, messageText) {
         })
       });
 
-      if (!createResponse.ok) throw new Error(`Erro ao criar lead: ${createResponse.status}`);
+      if (!createResponse.ok) {
+        console.error('❌ Erro ao criar lead:', createResponse.status);
+        return false;
+      }
+      
       const newLead = await createResponse.json();
       leadId = newLead[0]?.id;
 
@@ -131,7 +148,11 @@ async function saveToDatabase(senderId, messageText) {
       })
     });
 
-    if (!messageResponse.ok) throw new Error(`Erro ao salvar mensagem: ${messageResponse.status}`);
+    if (!messageResponse.ok) {
+      console.error('❌ Erro ao salvar mensagem:', messageResponse.status);
+      return false;
+    }
+    
     const savedMessage = await messageResponse.json();
     console.log('✅ Mensagem salva:', savedMessage[0]?.id);
 
@@ -148,8 +169,15 @@ async function saveToDatabase(senderId, messageText) {
    ============================================================ */
 async function sendFlowMessage(senderId) {
   try {
+    console.log('🚀 Iniciando envio do fluxo para:', senderId);
+    
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseKey) {
+      console.error('⚠️ Variáveis do Supabase não encontradas para envio');
+      return false;
+    }
 
     const headers = {
       'apikey': supabaseKey,
@@ -158,41 +186,93 @@ async function sendFlowMessage(senderId) {
     };
 
     // 1. Buscar mensagem inicial (type=title)
-    const resp = await fetch(`${supabaseUrl}/rest/v1/flow_option?type=eq.title&order=ordem.asc&limit=1`, { headers });
-    const data = await resp.json();
-
-    if (data?.length > 0) {
-      const welcome = data[0];
-      let finalMessage = welcome.message + "\n\n";
-
-      // 2. Buscar opções vinculadas (id_parent = id do título)
-      const respOpt = await fetch(`${supabaseUrl}/rest/v1/flow_option?id_parent=eq.${welcome.id}&order=ordem.asc`, { headers });
-      const options = await respOpt.json();
-
-      if (options?.length) {
-        options.forEach((opt, i) => {
-          finalMessage += `${i + 1}. ${opt.message}\n`;
-        });
-      }
-
-      // 3. Enviar pelo WhatsApp Cloud API
-      await fetch(`https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: senderId,
-          type: "text",
-          text: { body: finalMessage }
-        })
-      });
-
-      console.log("✅ Fluxo enviado para", senderId);
+    console.log('🔍 Buscando mensagem título...');
+    const titleUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.title&order=ordem.asc&limit=1`;
+    const titleResponse = await fetch(titleUrl, { headers });
+    
+    if (!titleResponse.ok) {
+      console.error('❌ Erro ao buscar título:', titleResponse.status);
+      return false;
     }
+    
+    const titleData = await titleResponse.json();
+    console.log('📋 Dados do título:', titleData);
+
+    if (!titleData?.length) {
+      console.error('❌ Nenhuma mensagem de título encontrada');
+      return false;
+    }
+
+    const welcome = titleData[0];
+    let finalMessage = welcome.message + "\n\n";
+
+    // 2. Buscar opções (type=option) - CORREÇÃO: buscar por type, não por id_parent
+    console.log('🔍 Buscando opções...');
+    const optionsUrl = `${supabaseUrl}/rest/v1/flow_option?type=eq.option&order=ordem.asc`;
+    const optionsResponse = await fetch(optionsUrl, { headers });
+    
+    if (!optionsResponse.ok) {
+      console.error('❌ Erro ao buscar opções:', optionsResponse.status);
+      return false;
+    }
+    
+    const options = await optionsResponse.json();
+    console.log('📋 Opções encontradas:', options);
+
+    if (options?.length) {
+      options.forEach((opt, i) => {
+        finalMessage += `${i + 1}. ${opt.message}\n`;
+      });
+    }
+
+    console.log('📝 Mensagem final:', finalMessage);
+
+    // 3. Verificar variáveis do WhatsApp
+    const phoneNumberId = process.env.PHONE_NUMBER_ID;
+    const whatsappToken = process.env.WHATSAPP_TOKEN;
+
+    if (!phoneNumberId || !whatsappToken) {
+      console.error('⚠️ Variáveis do WhatsApp não encontradas');
+      console.log('PHONE_NUMBER_ID:', phoneNumberId ? 'OK' : 'MISSING');
+      console.log('WHATSAPP_TOKEN:', whatsappToken ? 'OK' : 'MISSING');
+      return false;
+    }
+
+    // 4. Enviar pelo WhatsApp Cloud API
+    console.log('📤 Enviando mensagem via WhatsApp API...');
+    const whatsappUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+    const whatsappPayload = {
+      messaging_product: "whatsapp",
+      to: senderId,
+      type: "text",
+      text: { body: finalMessage }
+    };
+
+    console.log('🔗 URL:', whatsappUrl);
+    console.log('📦 Payload:', JSON.stringify(whatsappPayload, null, 2));
+
+    const whatsappResponse = await fetch(whatsappUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${whatsappToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(whatsappPayload)
+    });
+
+    const responseText = await whatsappResponse.text();
+    console.log('📥 Resposta WhatsApp:', whatsappResponse.status, responseText);
+
+    if (!whatsappResponse.ok) {
+      console.error('❌ Erro ao enviar WhatsApp:', whatsappResponse.status, responseText);
+      return false;
+    }
+
+    console.log("✅ Fluxo enviado com sucesso para", senderId);
+    return true;
+
   } catch (error) {
     console.error("❌ Erro ao enviar fluxo:", error);
+    return false;
   }
 }
