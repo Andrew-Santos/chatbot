@@ -49,16 +49,40 @@ export default async function handler(req, res) {
                   }
 
                   const senderId = message.from;
-                  const messageText = message.text?.body || `Mensagem ${message.type}`;
+                  let messageText = '';
+                  let isInteractiveResponse = false;
 
-                  console.log(`📱 Nova mensagem de ${senderId}: ${messageText}`);
+                  // 🔹 Verificar tipo de mensagem
+                  if (message.type === 'text') {
+                    messageText = message.text?.body || 'Mensagem de texto';
+                  } else if (message.type === 'interactive') {
+                    // Resposta de lista interativa
+                    if (message.interactive?.type === 'list_reply') {
+                      const selectedOption = message.interactive.list_reply;
+                      messageText = `Selecionou: ${selectedOption.title}`;
+                      isInteractiveResponse = true;
+                      console.log('📋 Opção selecionada:', selectedOption);
+                    } else if (message.interactive?.type === 'button_reply') {
+                      const selectedButton = message.interactive.button_reply;
+                      messageText = `Clicou: ${selectedButton.title}`;
+                      isInteractiveResponse = true;
+                      console.log('🔘 Botão clicado:', selectedButton);
+                    }
+                  } else {
+                    messageText = `Mensagem ${message.type}`;
+                  }
+
+                  console.log(`📱 Nova mensagem de ${senderId}: ${messageText}${isInteractiveResponse ? ' (interativa)' : ''}`);
 
                   // 1. Salvar mensagem recebida no Supabase
                   const saved = await saveToDatabase(senderId, messageText);
                   
-                  if (saved) {
-                    // 2. Responder com fluxo inicial
+                  if (saved && !isInteractiveResponse) {
+                    // 2. Responder com fluxo inicial (apenas para mensagens de texto normais)
                     await sendFlowMessage(senderId);
+                  } else if (saved && isInteractiveResponse) {
+                    // 3. Processar resposta interativa (você pode implementar lógica específica aqui)
+                    await handleInteractiveResponse(senderId, message.interactive);
                   }
                 }
               }
@@ -165,8 +189,79 @@ async function saveToDatabase(senderId, messageText) {
 }
 
 /* ============================================================
-   🔹 Função para buscar o fluxo inicial e enviar no WhatsApp
+   🔹 Função para processar respostas interativas
    ============================================================ */
+async function handleInteractiveResponse(senderId, interactive) {
+  try {
+    console.log('🎯 Processando resposta interativa para:', senderId);
+    
+    if (interactive.type === 'list_reply') {
+      const selectedOption = interactive.list_reply;
+      const optionId = selectedOption.id; // exemplo: "option_2"
+      
+      console.log('📋 Usuário selecionou:', selectedOption.title, 'ID:', optionId);
+      
+      // Aqui você pode implementar a lógica para cada opção
+      // Por exemplo, buscar próximo fluxo baseado na opção selecionada
+      
+      // Enviar confirmação
+      await sendSimpleMessage(senderId, `✅ Você selecionou: ${selectedOption.title}\n\nEm breve nossa equipe entrará em contato!`);
+      
+    } else if (interactive.type === 'button_reply') {
+      const selectedButton = interactive.button_reply;
+      console.log('🔘 Usuário clicou:', selectedButton.title);
+      
+      await sendSimpleMessage(senderId, `✅ Opção confirmada: ${selectedButton.title}`);
+    }
+    
+  } catch (error) {
+    console.error('❌ Erro ao processar resposta interativa:', error);
+  }
+}
+
+/* ============================================================
+   🔹 Função para enviar mensagem de texto simples
+   ============================================================ */
+async function sendSimpleMessage(senderId, messageText) {
+  try {
+    const phoneNumberId = process.env.PHONE_NUMBER_ID;
+    const whatsappToken = process.env.WHATSAPP_TOKEN;
+
+    if (!phoneNumberId || !whatsappToken) {
+      console.error('⚠️ Variáveis do WhatsApp não encontradas');
+      return false;
+    }
+
+    const whatsappUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+    const payload = {
+      messaging_product: "whatsapp",
+      to: senderId,
+      type: "text",
+      text: { body: messageText }
+    };
+
+    const response = await fetch(whatsappUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${whatsappToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      console.error('❌ Erro ao enviar mensagem simples:', response.status);
+      return false;
+    }
+
+    console.log('✅ Mensagem simples enviada');
+    return true;
+
+  } catch (error) {
+    console.error('❌ Erro ao enviar mensagem simples:', error);
+    return false;
+  }
+}
 async function sendFlowMessage(senderId) {
   try {
     console.log('🚀 Iniciando envio do fluxo para:', senderId);
@@ -204,7 +299,6 @@ async function sendFlowMessage(senderId) {
     }
 
     const welcome = titleData[0];
-    let finalMessage = welcome.message + "\n\n";
 
     // 2. Buscar opções (type=option) - CORREÇÃO: buscar por type, não por id_parent
     console.log('🔍 Buscando opções...');
@@ -219,13 +313,10 @@ async function sendFlowMessage(senderId) {
     const options = await optionsResponse.json();
     console.log('📋 Opções encontradas:', options);
 
-    if (options?.length) {
-      options.forEach((opt, i) => {
-        finalMessage += `${i + 1}. ${opt.message}\n`;
-      });
+    if (!options?.length) {
+      console.error('❌ Nenhuma opção encontrada');
+      return false;
     }
-
-    console.log('📝 Mensagem final:', finalMessage);
 
     // 3. Verificar variáveis do WhatsApp
     const phoneNumberId = process.env.PHONE_NUMBER_ID;
@@ -238,14 +329,43 @@ async function sendFlowMessage(senderId) {
       return false;
     }
 
-    // 4. Enviar pelo WhatsApp Cloud API
-    console.log('📤 Enviando mensagem via WhatsApp API...');
+    // 4. Enviar pelo WhatsApp Cloud API com Lista Interativa
+    console.log('📤 Enviando lista interativa via WhatsApp API...');
     const whatsappUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+    
+    // Preparar opções para a lista
+    const listOptions = options.map((opt, i) => ({
+      id: `option_${opt.id}`,
+      title: opt.message.substring(0, 24), // WhatsApp limita a 24 caracteres
+      description: opt.message.length > 24 ? opt.message.substring(24, 72) : undefined // Descrição opcional até 72 chars
+    }));
+
     const whatsappPayload = {
       messaging_product: "whatsapp",
       to: senderId,
-      type: "text",
-      text: { body: finalMessage }
+      type: "interactive",
+      interactive: {
+        type: "list",
+        header: {
+          type: "text",
+          text: "🎓 Matriz Class Jurídico"
+        },
+        body: {
+          text: welcome.message
+        },
+        footer: {
+          text: "Selecione uma opção abaixo 👇"
+        },
+        action: {
+          button: "Ver Opções",
+          sections: [
+            {
+              title: "Menu Principal",
+              rows: listOptions
+            }
+          ]
+        }
+      }
     };
 
     console.log('🔗 URL:', whatsappUrl);
