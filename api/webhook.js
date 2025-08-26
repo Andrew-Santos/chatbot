@@ -348,7 +348,7 @@ async function sendFlowMessage(senderId) {
         type: "list",
         header: {
           type: "text",
-          text: "🎓 Matriz Class Jurídico"
+          text: "✔️ Matriz Class Jurídico"
         },
         body: {
           text: welcome.message
@@ -396,3 +396,4 @@ async function sendFlowMessage(senderId) {
     return false;
   }
 }
+
