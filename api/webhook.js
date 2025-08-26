@@ -387,15 +387,17 @@ async function sendFlowMessage(senderId) {
       return false;
     }
 
-    // 6. Enviar pelo WhatsApp Cloud API com Lista Interativa
-    console.log('📤 Enviando lista interativa via WhatsApp API...');
+    // 6. Enviar pelo WhatsApp Cloud API com Botões (mais compatível que listas)
+    console.log('📤 Enviando botões interativos via WhatsApp API...');
     const whatsappUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
     
-    // Preparar opções para a lista
-    const listOptions = options.map((opt) => ({
-      id: `option_${opt.id}`,
-      title: opt.message.substring(0, 24), // WhatsApp limita a 24 caracteres
-      description: opt.message.length > 24 ? opt.message.substring(24, 72) : undefined // Descrição opcional até 72 chars
+    // Preparar botões (máximo 3 botões por mensagem)
+    const buttons = options.slice(0, 3).map((opt, index) => ({
+      type: "reply",
+      reply: {
+        id: `btn_${opt.id}`,
+        title: opt.message.substring(0, 20) // Limite de 20 caracteres para botões
+      }
     }));
 
     const whatsappPayload = {
@@ -403,7 +405,7 @@ async function sendFlowMessage(senderId) {
       to: senderId,
       type: "interactive",
       interactive: {
-        type: "list",
+        type: "button",
         header: {
           type: "text",
           text: headerText
@@ -415,12 +417,7 @@ async function sendFlowMessage(senderId) {
           text: footerText
         },
         action: {
-          button: "Ver Opções",
-          sections: [
-            {
-              rows: listOptions
-            }
-          ]
+          buttons: buttons
         }
       }
     };
@@ -442,7 +439,11 @@ async function sendFlowMessage(senderId) {
 
     if (!whatsappResponse.ok) {
       console.error('❌ Erro ao enviar WhatsApp:', whatsappResponse.status, responseText);
-      return false;
+      
+      // Se falhar com botões, tentar mensagem de texto simples como fallback
+      console.log('🔄 Tentando enviar como mensagem de texto...');
+      const fallbackSuccess = await sendTextMenuFallback(senderId, welcomeMessage.message, headerText, footerText, options);
+      return fallbackSuccess;
     }
 
     console.log("✅ Fluxo enviado com sucesso para", senderId);
@@ -453,3 +454,61 @@ async function sendFlowMessage(senderId) {
     return false;
   }
 }
+
+/* ============================================================
+   🔹 Função de fallback para enviar menu como texto simples
+   ============================================================ */
+async function sendTextMenuFallback(senderId, bodyText, headerText, footerText, options) {
+  try {
+    console.log('📝 Enviando menu como texto simples...');
+    
+    const phoneNumberId = process.env.PHONE_NUMBER_ID;
+    const whatsappToken = process.env.WHATSAPP_TOKEN;
+
+    if (!phoneNumberId || !whatsappToken) {
+      console.error('⚠️ Variáveis do WhatsApp não encontradas');
+      return false;
+    }
+
+    // Montar menu como texto
+    let menuText = `*${headerText}*\n\n`;
+    menuText += `${bodyText}\n`;
+    menuText += `${footerText}\n\n`;
+    
+    options.forEach((option, index) => {
+      menuText += `${index + 1}️⃣ ${option.message}\n`;
+    });
+    
+    menuText += `\n_Digite o número da opção desejada._`;
+
+    const whatsappUrl = `https://graph.facebook.com/v22.0/${phoneNumberId}/messages`;
+    const payload = {
+      messaging_product: "whatsapp",
+      to: senderId,
+      type: "text",
+      text: { body: menuText }
+    };
+
+    const response = await fetch(whatsappUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${whatsappToken}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      console.error('❌ Erro ao enviar fallback:', response.status);
+      const errorText = await response.text();
+      console.error('❌ Detalhes do erro fallback:', errorText);
+      return false;
+    }
+
+    console.log('✅ Menu enviado como texto simples');
+    return true;
+
+  } catch (error) {
+    console.error('❌ Erro no fallback:', error);
+    return false;
+  }
